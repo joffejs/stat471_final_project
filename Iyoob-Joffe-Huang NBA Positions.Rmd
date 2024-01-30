@@ -1,0 +1,1588 @@
+---
+title: 'STAT471 Final Project: Predicting NBA Player Salaries'
+author: "Jackson Joffe, Jane Huang, Jake Iyoob"
+date: 'Due: May 5, 2021 at 11:59pm'
+output:
+  pdf_document:
+    number_sections: yes
+    toc: yes
+    toc_depth: '4'
+  html_document:
+    highlight: haddock
+    number_sections: yes
+    theme: lumen
+    toc: no
+    toc_depth: 4
+    toc_float: yes
+urlcolor: blue
+---
+
+**Executive Summary**
+
+A brief summary (one page or less) of the problem, data, analysis, and conclusions. 
+
+**Introduction**
+
+Background information, description of the analysis goals and why these questions are important to address in the context of the application.
+
+**Data Description and Explanation**
+
+```{r, warning = F, message = F}
+# imported libraries
+library(tidyverse)
+library(dplyr)
+library(nbastatR)
+library(FNN)
+library(rpart) # to train decision trees 
+library(rpart.plot) # to plot decision trees 
+library(randomForest) # random forests 
+library(gbm)
+library(ggcorrplot)
+# devtools::install_github("abresler/nbastatR") <- to install nbastatR package
+```
+
+We used an imported package called nbastatR. It is imported above, and the package can be installed by running the commented-out line at the end of the R chunk above.
+
+The data we used contains information for four different eras each spanning 15 years: from NBA games between 1959 and 1974, from NBA games between 1975 and 1989, from NBA games between 1990 and 2004, and from NBA games between 2005 and 2019. The data is obtained by calling a function from the imported package and specifying the seasons we want to select. Below, we tidy the data, removing unnecessary columns and renaming features to help interpretability. 
+
+```{r, message = F, warning = F}
+player_stats_1959_1974 = bref_players_stats(seasons = seq(from = 1959, to = 1974, by = 1)) %>% 
+  # remove features we don't need in our analysis 
+  select(-c(slugSeason, slugPosition, isSeasonCurrent, slugPlayerSeason, slugPlayerBREF, isHOFPlayer, slugTeamsBREF, idPlayerNBA, urlPlayerThumbnail, urlPlayerHeadshot, urlPlayerActionPhoto, countTeamsPlayerSeason ,slugTeamBREF, urlPlayerPhoto, urlPlayerStats, countTeamsPlayerSeasonTotals, urlPlayerBREF)) %>% 
+  # rename features for interpretability 
+  rename(Player = namePlayer, Year = yearSeason, Position = groupPosition, Age = agePlayer, numGames = countGames, minTotals = minutesTotals)
+player_stats_1959_1974
+
+player_stats_1975_1989 = bref_players_stats(seasons = seq(from = 1975, to = 1989, by = 1)) %>% 
+  # remove features we don't need in our analysis 
+  select(-c(slugSeason, slugPosition, isSeasonCurrent, slugPlayerSeason, slugPlayerBREF, isHOFPlayer, slugTeamsBREF, idPlayerNBA, urlPlayerThumbnail, urlPlayerHeadshot, urlPlayerActionPhoto, countTeamsPlayerSeason ,slugTeamBREF, urlPlayerPhoto, urlPlayerStats, countTeamsPlayerSeasonTotals, urlPlayerBREF)) %>% 
+  # rename features for interpretability 
+  rename(Player = namePlayer, Year = yearSeason, Position = groupPosition, Age = agePlayer, numGames = countGames, minTotals = minutesTotals)
+player_stats_1975_1989
+
+player_stats_1990_2004 = bref_players_stats(seasons = seq(from = 1990, to = 2004, by = 1)) %>% 
+  # remove features we don't need in our analysis 
+  select(-c(slugSeason, slugPosition, isSeasonCurrent, slugPlayerSeason, slugPlayerBREF, isHOFPlayer, slugTeamsBREF, idPlayerNBA, urlPlayerThumbnail, urlPlayerHeadshot, urlPlayerActionPhoto, countTeamsPlayerSeason ,slugTeamBREF, urlPlayerPhoto, urlPlayerStats, countTeamsPlayerSeasonTotals, urlPlayerBREF)) %>% 
+  # rename features for interpretability 
+  rename(Player = namePlayer, Year = yearSeason, Position = groupPosition, Age = agePlayer, numGames = countGames, minTotals = minutesTotals)
+player_stats_1990_2004
+
+player_stats_2005_2019 = bref_players_stats(seasons = seq(from = 2005, to = 2019, by = 1)) %>% 
+  # remove features we don't need in our analysis 
+  select(-c(slugSeason, slugPosition, isSeasonCurrent, slugPlayerSeason, slugPlayerBREF, isHOFPlayer, slugTeamsBREF, idPlayerNBA, urlPlayerThumbnail, urlPlayerHeadshot, urlPlayerActionPhoto, countTeamsPlayerSeason ,slugTeamBREF, urlPlayerPhoto, urlPlayerStats, countTeamsPlayerSeasonTotals, urlPlayerBREF)) %>% 
+  # rename features for interpretability 
+  rename(Player = namePlayer, Year = yearSeason, Position = groupPosition, Age = agePlayer, numGames = countGames, minTotals = minutesTotals)
+player_stats_2005_2019
+
+player_stats_1959_2019 = bref_players_stats(seasons = seq(from = 1959, to = 2019, by = 1)) %>% 
+  # remove features we don't need in our analysis 
+  select(-c(slugSeason, slugPosition, isSeasonCurrent, slugPlayerSeason, slugPlayerBREF, isHOFPlayer, slugTeamsBREF, idPlayerNBA, urlPlayerThumbnail, urlPlayerHeadshot, urlPlayerActionPhoto, countTeamsPlayerSeason ,slugTeamBREF, urlPlayerPhoto, urlPlayerStats, countTeamsPlayerSeasonTotals, urlPlayerBREF)) %>% 
+  # rename features for interpretability 
+  rename(Player = namePlayer, Year = yearSeason, Position = groupPosition, Age = agePlayer, numGames = countGames, minTotals = minutesTotals)
+player_stats_1959_2019
+```
+
+This next chunk of code simply renames data for the fourteen features we originally wish to consider. They are: 
+
+1. ptsTotals - Total points scored by a player in a season
+
+2. pfTotals - Total personal fouls by a player in a season
+
+3. astTotals - Total assists by a player in a season
+
+4. blkTotals - Total blocks by a player in a season *blocks introduced as an NBA stat in 1973-74
+
+5. trbTotals - Total rebounds (offensive and defensive) by a player in a season
+
+6. stlTotals - Total steals by a player in a season *steals introduced as an NBA stat in 1973-74
+
+7. fg3aTotals - Total three point field-goal attempts by a player in a season *the NBA introduced the three-pointer in 1979-1980
+
+8. pctFT - Free Throw Percentage; the formula is FT / FTA.
+
+9. ftaTotals - Total free throws attempted by a player in a season
+
+10. ratioWS - Win Shares is a player statistic which attempts to divide credit for team success to the individuals on the team. It is calculated using player, team and league-wide statistics and the sum of player win shares on a given team will be roughly equal to that team’s win total for the season
+
+11. ratioOWS - Similar to Win Shares but for offensive possessions
+
+12. ratioDWS - Similar to Win Shares but for defensive possessions
+
+13. orbTotals - Total number of offensive rebounds by a player in a season *offensive rebounds tracked beginning in 1973-74
+
+14. minTotals - Total number of minutes played by a player in a season
+
+Let's finalize our dataset below with our desired 6 features (keeping the player and year columns as indices). Also, let's remove rows with NA values.
+
+```{r, message = F, warning = F}
+# remove any rows with NA values
+
+# 2,333 observations
+df_1 = player_stats_1959_1974
+df_1[is.na(df_1)] <- 0
+df_1
+
+# 4,531 observations
+df_2 = player_stats_1975_1989
+df_2[is.na(df_2)] <- 0
+df_2
+
+# 6,294 observations
+df_3 = player_stats_1990_2004
+df_3[is.na(df_3)] <- 0
+df_3
+
+# 7,123 observations
+df_4 = player_stats_2005_2019
+df_4[is.na(df_4)] <- 0
+df_4
+
+df_full = player_stats_1959_2019
+df_full[is.na(df_full)] <- 0
+df_full
+
+# selecting the variables we want to analyze initially
+data_1 = df_1 %>% 
+  select(Player, Year, Position, ptsTotals, pfTotals, astTotals, blkTotals, trbTotals, stlTotals, fg3aTotals, pctFT, ftaTotals, ratioWS, ratioOWS, ratioDWS, orbTotals, minTotals)
+data_1
+
+data_2 = df_2 %>% 
+  select(Player, Year, Position, ptsTotals, pfTotals, astTotals, blkTotals, trbTotals, stlTotals, fg3aTotals, pctFT, ftaTotals, ratioWS, ratioOWS, ratioDWS, orbTotals, minTotals)
+data_2
+
+data_3 = df_3 %>% 
+  select(Player, Year, Position, ptsTotals, pfTotals, astTotals, blkTotals, trbTotals, stlTotals, fg3aTotals, pctFT, ftaTotals, ratioWS, ratioOWS, ratioDWS, orbTotals, minTotals)
+data_3
+
+data_4 = df_4 %>% 
+  select(Player, Year, Position, ptsTotals, pfTotals, astTotals, blkTotals, trbTotals, stlTotals, fg3aTotals, pctFT, ftaTotals, ratioWS, ratioOWS, ratioDWS, orbTotals, minTotals)
+data_4
+
+data_full = df_full %>% 
+  select(Player, Year, Position, ptsTotals, pfTotals, astTotals, blkTotals, trbTotals, stlTotals, fg3aTotals, pctFT, ftaTotals, ratioWS, ratioOWS, ratioDWS, orbTotals, minTotals)
+data_full
+```
+
+The barplot and means featured below shows that each position has at least 4000 observations with F and G having almost double that of C at around 8000 each. This difference simply reflects the fact that a team typically has two guards, two forwards, and one center on the floor. Given this fact, the number of guards and forwards in the data should reflect this 2 to 1 ratio. The counts for each category are sufficient to continue with EDA and model building.
+
+```{r, message = F, warning = F}
+# Looking at grouped means
+data_full %>% group_by(Position) %>% summarise(average_pts = mean(ptsTotals), average_pfs = mean(pfTotals), average_asts = mean(astTotals),
+                                             average_blks = mean(blkTotals), average_trb = mean(trbTotals), average_stls = mean(stlTotals),
+                                             average_3pa = mean(fg3aTotals), average_pctFT = mean(pctFT), average_ratioWS = mean(ratioWS),
+                                             average_ratioOWS = mean(ratioOWS), average_ratioDWS = mean(ratioDWS), average_orb = 
+                                               mean(orbTotals), average_min = mean(minTotals))
+
+# Distribution of Positions
+data_full %>% ggplot(mapping = aes(x = Position)) + geom_bar() + theme_bw() + ggsave(filename = 'Postions.png')
+```
+Using all of the data we graphed boxplots of select features, setting the x-axis to the position and the y-axis to the feature. This allowed us to compare the distribution of these features among the three different positions. The boxplots for each feature are featured below. 
+
+```{r, message = F, warning = F}
+# Position vs. total points
+data_full %>% ggplot(mapping = aes(x = Position, y = ptsTotals)) + geom_boxplot() + theme_bw() + ggsave(filename = 'ptsTotals.png')
+
+# Position vs. total assists
+data_full %>% ggplot(mapping = aes(x = Position, y = astTotals)) + geom_boxplot() + theme_bw() + ggsave(filename = 'astTotals.png')
+
+# Position vs. total rebounds
+data_full %>% ggplot(mapping = aes(x = Position, y = trbTotals)) + geom_boxplot() + theme_bw() + ggsave(filename = 'trbTotals.png')
+
+# Position vs. total steals
+data_full %>% ggplot(mapping = aes(x = Position, y = stlTotals)) + geom_boxplot() + theme_bw() + ggsave(filename = 'stlTotals.png')
+
+# Position vs. total blocks
+data_full %>% ggplot(mapping = aes(x = Position, y = blkTotals)) + geom_boxplot() + theme_bw() + ggsave(filename = 'blkTotals.png')
+
+# Position vs. total free-throw attempts
+data_full %>% ggplot(mapping = aes(x = Position, y = ftaTotals)) + geom_boxplot() + theme_bw() + ggsave(filename = 'ftaTotals.png')
+
+# Position vs. total presonal fouls
+data_full %>% ggplot(mapping = aes(x = Position, y = pfTotals)) + geom_boxplot() + theme_bw() + ggsave(filename = 'pfTotals.png')
+
+# Position vs. ratioWS
+data_full %>% ggplot(mapping = aes(x = Position, y = ratioWS)) + geom_boxplot() + theme_bw() + ggsave(filename = 'ratioWS.png')
+
+# Position vs. ratioOWS
+data_full %>% ggplot(mapping = aes(x = Position, y = ratioOWS)) + geom_boxplot() + theme_bw() + ggsave(filename = 'ratioOWS.png')
+
+# Position vs. ratioDWS
+data_full %>% ggplot(mapping = aes(x = Position, y = ratioDWS)) + geom_boxplot() + theme_bw() + ggsave(filename = 'ratioDWS.png')
+
+# Position vs. total offensive rebounds
+data_full %>% ggplot(mapping = aes(x = Position, y = orbTotals)) + geom_boxplot() + theme_bw() + ggsave(filename = 'orbTotals.png')
+
+# Position vs. total minutes
+data_full %>% ggplot(mapping = aes(x = Position, y = minTotals)) + geom_boxplot() + theme_bw() + ggsave(filename = 'minTotals.png')
+
+# Position vs. free-throw percentage
+data_full %>% ggplot(mapping = aes(x = Position, y = pctFT)) + geom_boxplot() + theme_bw() + ggsave(filename = 'pctFT.png')
+
+# Position vs. total three-pointers
+data_full %>% ggplot(mapping = aes(x = Position, y = fg3aTotals)) + geom_boxplot() + theme_bw() + ggsave(filename = 'fg3aTotals.png')
+```
+We then decided to analyze correlations between features to check for any possible multicollinearity issues. In order to do so, we used an imported package called “ggcorrplot”. This allowed us to call a function which computes the correlation matrix for the features. The correlation plot revealed high correlations between personal fouls, rebounding, and minutes. 
+
+```{r, message = F, warning = F}
+corr_data = data_full %>% select(-c(Position, Player, Year))
+correlations = round(cor(corr_data), 1)
+correlations
+ggcorrplot(correlations, hc.order = T, type = 'lower', lab = T) + ggsave(filename = 'correlations.png')
+```
+
+There are many troublesome correlations; notably, minutes seems to be highly correlated with other variables, which makes sense because time is always passsing. We chose to remove pfTotals, ratioOWS, ratioDWS, ratioWS, orbTotals, minTotals, orbTotals, and ptsTotals because they are significantly correlated with other variables and also because we wanted to simplify our analysis to aide with interpretability. This left us with just 6 features:  astTotals, stlTotals, trbTotals, blkTotals, pctFT, and fg3aTotals. 
+
+Features (after correlation matrix analysis):
+
+1. astTotals - Total assists by a player in a season
+
+2. blkTotals - Total blocks by a player in a season *blocks introduced as an NBA stat in 1973-74
+
+3. trbTotals - Total rebounds (offensive and defensive) by a player in a season
+
+4. stlTotals - Total steals by a player in a season *steals introduced as an NBA stat in 1973-74
+
+5. fg3aTotals - Total three point field-goal attempts by a player in a season *the NBA introduced the three-pointer in 1979-1980
+
+6. pctFT - A player's free-throw percentage (FTM / FTA) over the season
+
+Response:
+
+- Position - player's listed position (either G, F, or C)
+
+The following code further selects the 6 features we desire, as well as the response, year and player name. 
+
+```{r, message=F, warning =F}
+data_1_updated = data_1 %>% select(Position, astTotals, blkTotals, trbTotals, stlTotals, fg3aTotals, pctFT)
+data_1_updated
+
+data_2_updated = data_2 %>% select(Position, astTotals, blkTotals, trbTotals, stlTotals, fg3aTotals, pctFT)
+data_2_updated
+
+data_3_updated = data_3 %>% select(Position, astTotals, blkTotals, trbTotals, stlTotals, fg3aTotals, pctFT)
+data_3_updated
+
+data_4_updated = data_4 %>% select(Position, astTotals, blkTotals, trbTotals, stlTotals, fg3aTotals, pctFT)
+data_4_updated
+
+data_full_updated = data_full %>% select(Position, astTotals, blkTotals, trbTotals, stlTotals, fg3aTotals, pctFT)
+data_full_updated
+```
+
+Here is the updated correlation matrix. 
+
+```{r, message = F, warning = F}
+corr_data_updated = data_full_updated %>% select(-Position)
+ggcorrplot(round(cor(corr_data_updated), 1), hc.order = T, type = 'lower', lab = T) + ggsave(filename = 'correlations_updated.png')
+```
+
+This is much more reasonable in terms of multicollinearity. Though blocks and rebounds and assists and steals seem to be somewhat highly correlated, this could be due to underlying similarities in the way the stats are accumulated. We will further address this in our conclusion section.  
+
+
+The process of analyzing the distributions of these variables while also separating the data by era would require too much space and will be covered in more depth in the modeling section. However, we used one feature, astTotals, to demonstrate how a features distribution between positions might change through the 4 eras. 
+
+```{r, message = F, warning = F}
+# Position vs. total assists era 1
+data_1 %>% ggplot(mapping = aes(x = Position, y = astTotals)) + geom_boxplot() + theme_bw() + ggtitle('1959 - 1974') + ylim(0, 1000) + ggsave(filename = 'ast1.png')
+
+# Position vs. total assists era 2
+data_2 %>% ggplot(mapping = aes(x = Position, y = astTotals)) + geom_boxplot() + theme_bw() + ggtitle('1975 - 1989') + ylim(0, 1000) + ggsave(filename = 'ast2.png')
+
+# Position vs. total assists era 3
+data_3 %>% ggplot(mapping = aes(x = Position, y = astTotals)) + geom_boxplot() + theme_bw() + ggtitle('1990 - 2004') + ylim(0, 1000) + ggsave(filename = 'ast3.png')
+
+# Position vs. total assists era 4
+data_4 %>% ggplot(mapping = aes(x = Position, y = astTotals)) + geom_boxplot() + theme_bw() + ggtitle('2005 - 2019') + ylim(0, 1000) + ggsave(filename = 'ast4.png')
+```
+The above boxplots, compared with each of the other eras, are an example of how features and their distributions might change over time. As one can see, the general trend of guards out-assisting both forwards and centers by a large margin does not change. However, the graphs show that centers and guards average significantly less assists in the most recent two eras. This represents an evolving trend of players to pass less and score in a solo fashion (1 on 1), which negates many possible assists. The older two eras featured players who focused more on passing and preset plays. This is just one example of a feature’s distribution changing with time. This type of analysis will be further explored in evaluation and interpretation sections.
+
+Before we move on to the next section, let's split our data into train and test sets for each period. We use an 80-20 train-test split. 
+
+```{r, message = F, warning = F}
+set.seed(1)
+n_total_1 = nrow(data_1_updated)
+n_train_1 = round(0.8*n_total_1)
+n_test_1 = n_total_1-n_train_1
+partition_1 = sample(c(rep("train", n_train_1), rep("test", n_test_1)))
+
+train_data_1 = data_1_updated %>%
+  bind_cols(partition_1 = partition_1) %>%
+  filter(partition_1 == "train") %>%
+  select(-partition_1)
+test_data_1 = data_1_updated %>%
+  bind_cols(partition_1 = partition_1) %>%
+  filter(partition_1 == "test") %>%
+  select(-partition_1)
+
+n_total_2 = nrow(data_2_updated)
+n_train_2 = round(0.8*n_total_2)
+n_test_2 = n_total_2-n_train_2
+partition_2 = sample(c(rep("train", n_train_2), rep("test", n_test_2)))
+
+train_data_2 = data_2_updated %>%
+  bind_cols(partition_2 = partition_2) %>%
+  filter(partition_2 == "train") %>%
+  select(-partition_2)
+test_data_2 = data_2_updated %>%
+  bind_cols(partition_2 = partition_2) %>%
+  filter(partition_2 == "test") %>%
+  select(-partition_2)
+
+n_total_3 = nrow(data_3_updated)
+n_train_3 = round(0.8*n_total_3)
+n_test_3 = n_total_3-n_train_3
+partition_3 = sample(c(rep("train", n_train_3), rep("test", n_test_3)))
+
+train_data_3 = data_3_updated %>%
+  bind_cols(partition_3 = partition_3) %>%
+  filter(partition_3 == "train") %>%
+  select(-partition_3)
+test_data_3 = data_3_updated %>%
+  bind_cols(partition_3 = partition_3) %>%
+  filter(partition_3 == "test") %>%
+  select(-partition_3)
+
+n_total_4 = nrow(data_4_updated)
+n_train_4 = round(0.8*n_total_4)
+n_test_4 = n_total_4-n_train_4
+partition_4 = sample(c(rep("train", n_train_4), rep("test", n_test_4)))
+
+train_data_4 = data_4_updated %>%
+  bind_cols(partition_4 = partition_4) %>%
+  filter(partition_4 == "train") %>%
+  select(-partition_4)
+test_data_4 = data_4_updated %>%
+  bind_cols(partition_4 = partition_4) %>%
+  filter(partition_4 == "test") %>%
+  select(-partition_4)
+
+n_total = nrow(data_full_updated)
+n_train = round(0.8*n_total)
+n_test = n_total-n_train
+partition = sample(c(rep("train", n_train), rep("test", n_test)))
+
+train_data = data_full_updated %>%
+  bind_cols(partition = partition) %>%
+  filter(partition == "train") %>%
+  select(-partition)
+test_data = data_full_updated %>%
+  bind_cols(partition = partition) %>%
+  filter(partition == "test") %>%
+  select(-partition)
+```
+
+**Model Building, Evaluation, and Interpretation**
+
+We could start by trying to fit a tree. A good first step when tackling a classification problem, though, is to look at the class proportions.
+
+```{r, warning = F, message = F}
+table(train_data_1$Position)
+
+table(train_data_2$Position)
+
+table(train_data_3$Position)
+
+table(train_data_4$Position)
+
+table(train_data$Position)
+```
+
+Notably, we see more players in our observation set as we progress eras. Now, let's fit a standard tree to the training data for each period.
+
+```{r, message = F, warning = F}
+set.seed(1)
+tree_fit_1 = rpart(as.factor(Position) ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+                 method = "class",
+                 parms = list(split = "gini"),
+                 data = train_data_1)
+rpart.plot(tree_fit_1)
+```
+
+In this optimal tree, there are 9 terminal nodes and 8 splits. The sequence of splits that leads to the largest proportion of centers is: more than 1182 total rebounds and less than 412 total assists. The analogous sequence of splits for forwards is: between 49 and 134 rebounds and less than 39 total assists. Finally, the analogous sequence of splits for guards is: less than 425 total rebounds, between 40 and 126 assists, and less than 134 rebounds. 
+
+For the first era (1959-1974), it appears that rebounds, assists, and free-throw percentage are the most important variables in classifying position. Notably, this era was played almost entirely without blocks and steals recorded; these stats were only recorded beginning in the 1973-74 season, the last season in this set of observations. Thus, the tree does not consider these stats to be as important. 
+
+```{r, message = F, warning = F}
+set.seed(1)
+tree_fit_2 = rpart(as.factor(Position) ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+                 method = "class",
+                 parms = list(split = "gini"),
+                 data = train_data_2)
+rpart.plot(tree_fit_2)
+```
+
+In this optimal tree, there are 13 terminal nodes and 12 splits. The sequence of splits that leads to the largest proportion of centers is: less than 345 rebounds but more than 127 rebounds, less than 136 assists, and less than 24 steals. The analogous sequence of splits for forwards is: more than 344 total rebounds, less than 73 blocks, and less than 440 assists. Finally, the analogous sequence of splits for guards is: less than 345 total rebounds and more than 136 total assists.
+
+For the second era (1975-1989), rebounds and assists are still important in classifying position. However, with the introduction of steals and blocks in the 1973-74 season and the three-point shot in the 1979-1980 season, we see these variables usurp free-throw percentage in this era's tree model. 
+
+```{r, message = F, warning = F}
+set.seed(1)
+tree_fit_3 = rpart(as.factor(Position) ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+                 method = "class",
+                 parms = list(split = "gini"),
+                 data = train_data_3)
+rpart.plot(tree_fit_3)
+```
+
+In this optimal tree, there are 11 terminal nodes and 10 splits — fewer than each of the last two trees. The sequence of splits that leads to the largest proportion of centers is: less than 10 three-point shots and more than 33 blocks. The analogous sequence of splits for forwards is: more than 9 total three-pointers attempted, less than 351 rebounds but more than 80 rebounds, and less than 85 assists. Finally, the analogous sequence of splits for guards is: more than 9 three-pointers attempted, more than 350 rebounds, and more than 143 total assists.
+
+For the third era (1990-2006), we see the tree gets slightly smaller but maintains some of its general structure. Three-pointers, blocks, steals, and rebounds are the important features in the model. The model can adeptly differentiate between guards and centers in most nodes, analyzing three-point totals, block totals, and assist totals. 
+
+```{r, message = F, warning = F}
+set.seed(1)
+tree_fit_4 = rpart(as.factor(Position) ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+                 method = "class",
+                 parms = list(split = "gini"),
+                 data = train_data_4)
+rpart.plot(tree_fit_4)
+```
+
+In this optimal tree, there are 12 terminal nodes and 11 splits. The sequence of splits that leads to the largest proportion of centers is: less than 8 total threes taken and more than 1 block. The analogous sequence of splits for forwards is: more than 7 total three-point shots, less than 20 blocks, less than 51 assists, and more than 174 rebounds. Finally, the analogous sequence of splits for guards is: more than 7 total three-point shots, less than 20 blocks, and more than 106 assists.
+
+For the fourth and final era (2005-2019), the tree gets even smaller. The model now only includes three-point totals, offensive rebounding totals, assist totals, and block totals. For centers, blocks are extremely important — having at least one block with less than 8 total threes taken on the year is a good indicator of being a center for this era. To differentiate between guards and forwards, the model looks at offensive rebounds and assist thresholds; we would expect forwards (who are taller on average) to grab more offensive rebounds while we would expect guards to dish more assists.
+
+```{r, message = F, warning = F}
+set.seed(1)
+tree_fit_full = rpart(as.factor(Position) ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+                 method = "class",
+                 parms = list(split = "gini"),
+                 data = train_data)
+rpart.plot(tree_fit_full)
+```
+
+In this optimal tree, there are 11 terminal nodes and 10 splits. The sequence of splits that leads to the largest proportion of centers is: less than 9 total threes taken, more than 20 blocks, and less than 51 steals. The analogous sequence of splits for forwards is: more than 8 threes taken, more than 321 rebounds, and less than 344 assists. Finally, the analogous sequence of splits for guards is: more than 9 three-pointers attempted, less than 322 rebounds, and more than 114 assists.
+
+The model on the full data appears to mostly rely on values for three-point field goals attempted, assists, steals, and blocks. While three-pointers, steals, and blocks weren't recorded throughout the entire dataset, assists are recorded throughout NBA history and are clearly an important variable in classifying player position. 
+
+From these initial trees, it seems the algorithm is understanding some of the key differences between guards, forwards, and centers. Centers in general accumulate more blocks and rebounds due to their relative height and strength, and most big men shoot less threes. Guards also do tend to rack up more assists than forwards because they often are the team's primary ballhandler. 
+
+Now, let's find the optimal tree sizes via pruning and cross-validation for each era. We start by fitting the largest tree possible $T_0$ for each era, and then we produce a cross-validation plot based on the information in the cp table.
+
+**First era (1959-1974)**
+
+```{r, message = F, warning = F}
+set.seed(1)
+deep_tree_fit_1 = rpart(as.factor(Position) ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+                      control = rpart.control(minsplit = 2, minbucket = 1, cp = 0),
+                 method = "class",
+                 parms = list(split = "gini"),
+                 data = train_data_1)
+printcp(deep_tree_fit_1)
+
+cp_table_1 = printcp(deep_tree_fit_1) %>%
+  as_tibble() %>% filter(nsplit > 1) %>%
+  mutate(terminal_nodes = nsplit + 1)
+
+cp_table_1 %>%
+  ggplot(aes(x = terminal_nodes, y = xerror,
+             ymin = xerror - xstd, ymax = xerror + xstd)) + geom_point() + geom_line() +
+  geom_errorbar(width = 0.2) + xlab("Number of terminal nodes") + ylab("CV error") + 
+  geom_hline(aes(yintercept = min(xerror)), linetype = "dashed") + 
+  scale_x_log10() + theme_bw()
+```
+The optimal tree for the first era appears to have about 12 terminal nodes. We can extract the exact optimal fit below.
+
+```{r, message = F, warning = F}
+set.seed(1)
+optimal_tree_info_1 = cp_table_1 %>%
+  filter(xerror - xstd < min(xerror)) %>%
+  arrange(nsplit) %>% 
+  head(1)
+
+optimal_tree_1 = prune(deep_tree_fit_1, cp = optimal_tree_info_1$CP) 
+rpart.plot(optimal_tree_1)
+```
+**Second Era (1975-1990)**
+
+```{r, message = F, warning = F}
+set.seed(1)
+deep_tree_fit_2 = rpart(as.factor(Position) ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+                      control = rpart.control(minsplit = 2, minbucket = 1, cp = 0),
+                 method = "class",
+                 parms = list(split = "gini"),
+                 data = train_data_2)
+printcp(deep_tree_fit_2)
+
+cp_table_2 = printcp(deep_tree_fit_2) %>%
+  as_tibble() %>% filter(nsplit > 1) %>%
+  mutate(terminal_nodes = nsplit + 1)
+
+cp_table_2 %>%
+  ggplot(aes(x = terminal_nodes, y = xerror,
+             ymin = xerror - xstd, ymax = xerror + xstd)) + geom_point() + geom_line() +
+  geom_errorbar(width = 0.2) + xlab("Number of terminal nodes") + ylab("CV error") + 
+  geom_hline(aes(yintercept = min(xerror)), linetype = "dashed") + 
+  scale_x_log10() + theme_bw()
+```
+The optimal tree for the first era appears to have about 55 terminal nodes. We can extract the exact optimal fit below.
+
+```{r, message = F, warning = F}
+set.seed(1)
+optimal_tree_info_2 = cp_table_2 %>%
+  filter(xerror - xstd < min(xerror)) %>%
+  arrange(nsplit) %>% 
+  head(1)
+
+optimal_tree_2 = prune(deep_tree_fit_2, cp = optimal_tree_info_2$CP) 
+rpart.plot(optimal_tree_2)
+```
+
+**Third Era (1990-2006)**
+
+```{r, message = F, warning = F}
+set.seed(1)
+deep_tree_fit_3 = rpart(as.factor(Position) ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+                      control = rpart.control(minsplit = 2, minbucket = 1, cp = 0),
+                 method = "class",
+                 parms = list(split = "gini"),
+                 data = train_data_3)
+printcp(deep_tree_fit_3)
+
+cp_table_3 = printcp(deep_tree_fit_3) %>%
+  as_tibble() %>% filter(nsplit > 1) %>%
+  mutate(terminal_nodes = nsplit + 1)
+
+cp_table_3 %>%
+  ggplot(aes(x = terminal_nodes, y = xerror,
+             ymin = xerror - xstd, ymax = xerror + xstd)) + geom_point() + geom_line() +
+  geom_errorbar(width = 0.2) + xlab("Number of terminal nodes") + ylab("CV error") + 
+  geom_hline(aes(yintercept = min(xerror)), linetype = "dashed") + 
+  scale_x_log10() + theme_bw()
+```
+The optimal tree for the first era appears to have about 43 terminal nodes. We can extract the exact optimal fit below.
+
+```{r, message = F, warning = F}
+set.seed(1)
+optimal_tree_info_3 = cp_table_3 %>%
+  filter(xerror - xstd < min(xerror)) %>%
+  arrange(nsplit) %>% 
+  head(1)
+
+optimal_tree_3 = prune(deep_tree_fit_3, cp = optimal_tree_info_3$CP) 
+rpart.plot(optimal_tree_3)
+```
+
+**Fourth Era (2005-2019)**
+
+```{r, message = F, warning = F}
+set.seed(1)
+deep_tree_fit_4 = rpart(as.factor(Position) ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+                      control = rpart.control(minsplit = 2, minbucket = 1, cp = 0),
+                 method = "class",
+                 parms = list(split = "gini"),
+                 data = train_data_4)
+printcp(deep_tree_fit_4)
+
+cp_table_4 = printcp(deep_tree_fit_4) %>%
+  as_tibble() %>% filter(nsplit > 1) %>%
+  mutate(terminal_nodes = nsplit + 1)
+
+cp_table_4 %>%
+  ggplot(aes(x = terminal_nodes, y = xerror,
+             ymin = xerror - xstd, ymax = xerror + xstd)) + geom_point() + geom_line() +
+  geom_errorbar(width = 0.2) + xlab("Number of terminal nodes") + ylab("CV error") + 
+  geom_hline(aes(yintercept = min(xerror)), linetype = "dashed") + 
+  scale_x_log10() + theme_bw()
+```
+The optimal tree for the fourth era appears to have about 29 terminal nodes. We can extract the exact optimal fit below.
+
+```{r, message = F, warning = F}
+set.seed(1)
+optimal_tree_info_4 = cp_table_4 %>%
+  filter(xerror - xstd < min(xerror)) %>%
+  arrange(nsplit) %>% 
+  head(1)
+
+optimal_tree_4 = prune(deep_tree_fit_4, cp = optimal_tree_info_4$CP) 
+rpart.plot(optimal_tree_4)
+```
+
+**Full Period (1959-2019)**
+
+Let's try out fitting a deep tree on the full (large) dataset, pruning it using the one-standard error rule, and see what the results give us. 
+```{r, message = F, warning = F}
+set.seed(1)
+deep_tree_fit_full = rpart(as.factor(Position) ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+                      control = rpart.control(minsplit = 2, minbucket = 1, cp = 0),
+                 method = "class",
+                 parms = list(split = "gini"),
+                 data = train_data)
+printcp(deep_tree_fit_full)
+
+cp_table_full = printcp(deep_tree_fit_full) %>%
+  as_tibble() %>% filter(nsplit > 1) %>%
+  mutate(terminal_nodes = nsplit + 1)
+
+cp_table_full %>%
+  ggplot(aes(x = terminal_nodes, y = xerror,
+             ymin = xerror - xstd, ymax = xerror + xstd)) + geom_point() + geom_line() +
+  geom_errorbar(width = 0.2) + xlab("Number of terminal nodes") + ylab("CV error") + 
+  geom_hline(aes(yintercept = min(xerror)), linetype = "dashed") + 
+  scale_x_log10() + theme_bw()
+```
+The optimal tree for the fourth era appears to have about 100 terminal nodes. We can extract the exact optimal fit below.
+
+```{r, message = F, warning = F}
+set.seed(1)
+optimal_tree_info_full = cp_table_full %>%
+  filter(xerror - xstd < min(xerror)) %>%
+  arrange(nsplit) %>% 
+  head(1)
+
+optimal_tree_full = prune(deep_tree_fit_full, cp = optimal_tree_info_full$CP) 
+rpart.plot(optimal_tree_full)
+```
+
+As you can see, fitting the model on the entire dataset is difficult to interpret. We omit interpretation of this tree model, though we do continue to fit other models to the full dataset alongside each era. 
+
+Now, let's try a random forest model with default parameters for each training dataset as well as the full dataset. We will plot the fit errors versus the number of trees, and we will also plot the OOB error as a function of the number of trees. Later, we will tune the models. We will fit a model with 500 trees.
+
+```{r, message = F, warning = F}
+set.seed(1)
+rf_fit_1 = randomForest(factor(Position) ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+                      importance = T,
+                      data = train_data_1,
+                      ntree = 500)
+plot(rf_fit_1)
+
+tibble(oob_error = rf_fit_1$err.rate[,"OOB"], trees = 1:500) %>%
+  ggplot(aes(x = trees, y = oob_error)) + geom_line() + theme_bw()
+```
+
+The default value of mtry that was used in each era is floor(sqrt(p = 14)) = 3. OOB error in the first era appears to relatively stabilize around 300 trees, getting to its lowest range of values earlier around 200 trees. 
+
+```{r, message = F, warning = F}
+set.seed(1)
+rf_fit_2 = randomForest(factor(Position) ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+                      importance = T,
+                      data = train_data_2,
+                      ntree = 500)
+plot(rf_fit_2)
+
+tibble(oob_error = rf_fit_2$err.rate[,"OOB"], trees = 1:500) %>%
+  ggplot(aes(x = trees, y = oob_error)) + geom_line() + theme_bw()
+```
+OOB error in the second era appears to stabilize around 325 trees, getting to its lowest range of values around 375 trees. 
+
+```{r, message = F, warning = F}
+set.seed(1)
+rf_fit_3 = randomForest(factor(Position) ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+                      importance = T,
+                      data = train_data_3,
+                      ntree = 500)
+plot(rf_fit_3)
+
+tibble(oob_error = rf_fit_3$err.rate[,"OOB"], trees = 1:500) %>%
+  ggplot(aes(x = trees, y = oob_error)) + geom_line() + theme_bw()
+```
+
+OOB error in the third era appears to stabilize around 300 trees, getting to its lowest range of values earlier around 150 trees. 
+
+```{r, message = F, warning = F}
+set.seed(1)
+rf_fit_4 = randomForest(factor(Position) ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+                      importance = T,
+                      data = train_data_4,
+                      ntree = 500)
+plot(rf_fit_4)
+
+tibble(oob_error = rf_fit_4$err.rate[,"OOB"], trees = 1:500) %>%
+  ggplot(aes(x = trees, y = oob_error)) + geom_line() + theme_bw()
+```
+
+OOB error in the fourth era appears to stabilize around 300 trees, getting to its lowest range of values earlier around 250 trees.
+
+**Full Period (1959-2019)**
+
+```{r, message = F, warning = F}
+set.seed(1)
+rf_fit_full = randomForest(factor(Position) ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+                      importance = T,
+                      data = train_data,
+                      ntree = 500)
+plot(rf_fit_full)
+
+tibble(oob_error = rf_fit_full$err.rate[,"OOB"], trees = 1:500) %>%
+  ggplot(aes(x = trees, y = oob_error)) + geom_line() + theme_bw()
+```
+
+OOB error in the fourth era appears to stabilize around 150 trees, getting to its lowest range of values earlier around 400 trees. Notably, the OOB error curve is much smoother for the full dataset. 
+
+This next section tunes the models for each of the eras and the full dataset. We only tune mtry, the most important parameter in the model. 
+
+**First Era (1959-1974)**
+
+We can only try at most 6 m-values, so we will try all 6. We will use a sufficiently large (100-1000 trees) ntree value of 500.
+
+```{r, message = F, warning = F}
+set.seed(1)
+# first era (1959-1974)
+mvalues_1 = seq(from = 1, to = 6, by = 1) # try 6 m-values 
+oob_errors_1 = numeric(length(mvalues_1))
+for(idx in 1:length(mvalues_1)){
+  m = mvalues_1[idx]
+  rf_fit = randomForest(factor(Position) ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals, 
+                        mtry = m, importance = TRUE, ntree = 500, data = train_data_1)
+  oob_errors_1[idx] = rf_fit$err.rate[,"OOB"]
+}
+
+tibble(m = mvalues_1, oob_err = oob_errors_1) %>%
+  ggplot(aes(x = m, y = oob_err)) + geom_line() + geom_point() + scale_x_continuous(breaks = mvalues_1)
+  theme_bw()
+```
+
+Selecting the values that produce the lowest out-of-bag error, we would select m = 5. We now produce the optimal model with m = 5.
+
+```{r, message = F, warning = F}
+set.seed(1)
+optimal_rf_fit_1 = randomForest(factor(Position) ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals, 
+                                mtry = 5, ntree = 500, importance = TRUE, data = train_data_1)
+oob_errors_1_optimal = bind_rows(tibble(ntree = 1:500, oob_err = optimal_rf_fit_1$err.rate[,"OOB"]))
+
+oob_errors_1_optimal %>%
+  ggplot(aes(x = ntree, y = oob_err)) + geom_line() + theme_bw()
+```
+The curve does appear to relatively stabilize around 300 trees for this dataset. 
+
+**Second Era (1975-1989)**
+
+```{r, message = F, warning = F}
+set.seed(1)
+# second era (1959-1974)
+mvalues_2 = seq(from = 1, to = 6, by = 1) # try 6 m-values 
+oob_errors_2 = numeric(length(mvalues_2))
+for(idx in 1:length(mvalues_2)){
+  m = mvalues_2[idx]
+  rf_fit = randomForest(factor(Position) ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals, 
+                        mtry = m, importance = TRUE, ntree = 500, data = train_data_2)
+  oob_errors_2[idx] = rf_fit$err.rate[,"OOB"]
+}
+
+tibble(m = mvalues_2, oob_err = oob_errors_2) %>%
+  ggplot(aes(x = m, y = oob_err)) + geom_line() + geom_point() + scale_x_continuous(breaks = mvalues_2)
+  theme_bw()
+```
+
+Selecting the values that produce the lowest out-of-bag error, we select m = 5. Then, we can train a random forest on 500 trees at m = 5 just to make sure the OOB curve has flattened out. 
+
+```{r, message = F, warning = F}
+set.seed(1)
+optimal_rf_fit_2 = randomForest(factor(Position) ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals, 
+                                mtry = 5, ntree = 500, importance = TRUE, data = train_data_2)
+oob_errors_2_optimal = bind_rows(tibble(ntree = 1:500, oob_err = optimal_rf_fit_2$err.rate[,"OOB"]))
+
+oob_errors_2_optimal %>%
+  ggplot(aes(x = ntree, y = oob_err)) + geom_line() + theme_bw()
+```
+The curve does appear to stabilize at around 300 trees trees for this dataset, reaching its minimum earlier at around 150 trees. 
+
+**Third Era (1990-2006)**
+
+```{r, message = F, warning = F}
+set.seed(1)
+# third era (1990-2006)
+mvalues_3 = seq(from = 1, to = 6, by = 1) # try 6 m-values 
+oob_errors_3 = numeric(length(mvalues_3))
+for(idx in 1:length(mvalues_3)){
+  m = mvalues_3[idx]
+  rf_fit = randomForest(factor(Position) ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals, 
+                        mtry = m, importance = TRUE, ntree = 500, data = train_data_3)
+  oob_errors_3[idx] = rf_fit$err.rate[,"OOB"]
+}
+
+tibble(m = mvalues_3, oob_err = oob_errors_3) %>%
+  ggplot(aes(x = m, y = oob_err)) + geom_line() + geom_point() + scale_x_continuous(breaks = mvalues_3)
+  theme_bw()
+```
+
+Selecting the value that produce the lowest out-of-bag error, we select m = 4. Then, we can train a random forest on 500 trees at m = 4 just to make sure the OOB curve has flattened out. 
+
+```{r, message = F, warning = F}
+set.seed(1)
+optimal_rf_fit_3 = randomForest(factor(Position) ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals, 
+                                mtry = 4, ntree = 500, importance = TRUE, data = train_data_3)
+oob_errors_3_optimal = bind_rows(tibble(ntree = 1:500, oob_err = optimal_rf_fit_3$err.rate[,"OOB"]))
+
+oob_errors_3_optimal %>%
+  ggplot(aes(x = ntree, y = oob_err)) + geom_line() + theme_bw()
+```
+The curve does appear to flatten out around 200 trees for this dataset. 
+
+**Fourth Era (2005-2019)**
+
+```{r, message = F, warning = F}
+set.seed(1)
+# fourth era (2005-2019)
+mvalues_4 = seq(from = 1, to = 6, by = 1) # try 6 m-values 
+oob_errors_4 = numeric(length(mvalues_4))
+for(idx in 1:length(mvalues_4)){
+  m = mvalues_4[idx]
+  rf_fit = randomForest(factor(Position) ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals, 
+                        mtry = m, importance = TRUE, ntree = 500, data = train_data_4)
+  oob_errors_4[idx] = rf_fit$err.rate[,"OOB"]
+}
+
+tibble(m = mvalues_4, oob_err = oob_errors_4) %>%
+  ggplot(aes(x = m, y = oob_err)) + geom_line() + geom_point() + scale_x_continuous(breaks = mvalues_4)
+  theme_bw()
+```
+
+Selecting the values that produce the lowest out-of-bag error, m = 3 is the best choice. Then, we can train a random forest on 500 trees at m = 3 just to make sure the OOB curve has flattened out. 
+
+```{r, message = F, warning = F}
+set.seed(1)
+optimal_rf_fit_4 = randomForest(factor(Position) ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals, 
+                                mtry = 3, ntree = 500, importance = TRUE, data = train_data_4)
+oob_errors_4_optimal = bind_rows(tibble(ntree = 1:500, oob_err = optimal_rf_fit_4$err.rate[,"OOB"]))
+
+oob_errors_4_optimal %>%
+  ggplot(aes(x = ntree, y = oob_err)) + geom_line() + theme_bw()
+```
+The curve does appear to relatively flatten out around 150 trees for this dataset. 
+
+**Full Period (1959-2019)**
+
+```{r, message = F, warning = F}
+set.seed(1)
+mvalues_full = seq(from = 1, to = 6, by = 1) # try 6 m-values 
+oob_errors_full = numeric(length(mvalues_full))
+for(idx in 1:length(mvalues_full)){
+  m = mvalues_full[idx]
+  rf_fit = randomForest(factor(Position) ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals, 
+                        mtry = m, importance = TRUE, ntree = 500, data = train_data)
+  oob_errors_full[idx] = rf_fit$err.rate[,"OOB"]
+}
+
+tibble(m = mvalues_full, oob_err = oob_errors_full) %>%
+  ggplot(aes(x = m, y = oob_err)) + geom_line() + geom_point() + scale_x_continuous(breaks = mvalues_full)
+  theme_bw()
+```
+
+Selecting the values that produce the lowest out-of-bag error, we select m = 4. Then, we can train a random forest on 500 trees at m = 4 just to make sure the OOB curve has flattened out. 
+
+```{r, message = F, warning = F}
+set.seed(1)
+optimal_rf_fit_full = randomForest(factor(Position) ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals, 
+                                mtry = 4, ntree = 500, importance = TRUE, data = train_data)
+oob_errors_full_optimal = bind_rows(tibble(ntree = 1:500, oob_err = optimal_rf_fit_full$err.rate[,"OOB"]))
+
+oob_errors_full_optimal %>%
+  ggplot(aes(x = ntree, y = oob_err)) + geom_line() + theme_bw()
+```
+The curve does appear to flatten out around 100 trees for this dataset. 
+
+Let's further produce variable importance plots for the optimal random forest for each dataset for further discussion.
+
+```{r, warning = F, message = F}
+varImpPlot(optimal_rf_fit_1, n.var = 6)
+```
+
+By MeanDecreaseAccuracy the top features are: trbTotals, astTotals, and pctFT, in that order. By MeanDecreaseGini the top features are: trbTotals, astTotals, and pctFT, in that order. Notably, blkTotals and stlTotals were not recorded until the 1973-74 season — the last in this era. Therefore, these features have little impact on the model. The three-point shot was not also introduced until the 1979-80 season.
+
+In this era, the model is able to discern that assists are important. Since guards and forwards are smaller, quicker, and more agile players in general, they are entrusted with primary ball handling duties. As a result, they often distribute the ball and accrue lots of assists because they have the ball the most often. Interestingly, free-throw attempt totals was not a significant factor in this era, despite the tendency in basketball's early years to foul bad free-throw shooters like Wilt Chamberlain. 
+
+
+```{r, warning = F, message = F}
+varImpPlot(optimal_rf_fit_2, n.var = 6)
+```
+
+By MeanDecreaseAccuracy the top features are: trbTotals, astTotals, and stlTotals, in that order. By MeanDecreaseGini the top features are: trbTotals, astTotals, and stlTotals, in that order. 
+
+During this era, steals and blocks were recorded during all years, so we see the model place more importance on these features in this era. Three-point shots are introduced in 1979-80, but the three ball was not a primary focus of teams' offensive strategies at this time, so the model deems it least important out of all our features.   
+
+```{r, warning = F, message = F}
+varImpPlot(optimal_rf_fit_3, n.var = 6)
+```
+
+By MeanDecreaseAccuracy the top features are: trbTotals, astTotals, and blkTotals, in that order. By MeanDecreaseGini the top features are: trbTotals, fg3aTotals, and astTotals, in that order. 
+
+In this era, we see three-point field goals become more important in classifying player position. The three-point shot was used more frequently in this period than both prior periods as teams recruited players who could shoot a high percentage from beyond the arc.
+
+```{r, warning = F, message = F}
+varImpPlot(optimal_rf_fit_4, n.var = 6)
+```
+
+By MeanDecreaseAccuracy the top features are: trbTotals, astTotals, and blkTotals, in that order. By MeanDecreaseGini the top features are: trbTotals, astTotals, and fg3aTotals, in that order. 
+
+The features in this era have relatively similar importance to the previous era. Blocks, assists, three-point shots, and rebounds appear to be the most important features. In today's modern NBA, teams have placed a greater emphasis on the three-point shot, and we see this reflected in this era. Still, the number of rebounds a player accrues (usually more if the player is taller/stronger) and the number of assists a player makes (usually more if the player is smaller/agile) are the most important aspects of this model. 
+
+```{r, warning = F, message = F}
+varImpPlot(optimal_rf_fit_full, n.var = 6)
+```
+
+By MeanDecreaseAccuracy the top features are: trbTotals, astTotals, and blkTotals, in that order. By MeanDecreaseGini the top features are: trbTotals, astTotals, and blkTotals, in that order. 
+
+When analyzing the entire dataset, we note that trbTotals and astTotals are biased statistics because they were recorded during all 60 years in the dataset; the same cannot be said for other features. Thus, these variables' importance is inflated relative to fg3aTotals, for example, which wasn't recorded until the 1979-80 season. 
+
+
+Finally, we try a Gradient Boosting Model for Multi-class Classification for each time period. To start, we'll set multinomial distribution, with 10 cross-validation folds, enough trees to bottom out the multinomial deviance curve, and a shrinkage factor of 0.01.
+
+```{r, message = F, warning = F}
+set.seed(1)
+gbm_fit_1 = gbm(Position ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+              data = train_data_1,
+              distribution = "multinomial",
+              cv.folds = 10,
+              interaction.depth = 1,
+              shrinkage = 0.01,
+              n.trees = 5000) 
+summary(gbm_fit_1)
+```
+
+We can visualize the CV error using `gbm.perf`, which both makes a plot and outputs the optimal number of trees (4,538):
+```{r}
+set.seed(1)
+opt_num_trees_per1 = gbm.perf(gbm_fit_1)
+opt_num_trees_per1
+```
+
+```{r, message = F, warning = F}
+set.seed(1)
+gbm_fit_2 = gbm(Position ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+              data = train_data_2,
+              distribution = "multinomial",
+              cv.folds = 10,
+              interaction.depth = 1,
+              shrinkage = 0.01,
+              n.trees = 7500) #7500 trees required
+summary(gbm_fit_2)
+```
+
+We can visualize the CV error using `gbm.perf`, which both makes a plot and outputs the optimal number of trees (7,467):
+```{r}
+set.seed(1)
+opt_num_trees_per2 = gbm.perf(gbm_fit_2)
+opt_num_trees_per2
+```
+
+```{r, message = F, warning = F}
+set.seed(1)
+gbm_fit_3 = gbm(Position ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+              data = train_data_3,
+              distribution = "multinomial",
+              cv.folds = 10,
+              interaction.depth = 1,
+              shrinkage = 0.01,
+              n.trees = 7500) #7500 trees
+summary(gbm_fit_3)
+```
+
+We can visualize the CV error using `gbm.perf`, which both makes a plot and outputs the optimal number of trees (7,451):
+```{r}
+set.seed(1)
+opt_num_trees_per3 = gbm.perf(gbm_fit_3)
+opt_num_trees_per3
+```
+
+```{r, message = F, warning = F}
+set.seed(1)
+gbm_fit_4 = gbm(Position ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+              data = train_data_4,
+              distribution = "multinomial",
+              cv.folds = 10,
+              interaction.depth = 1,
+              shrinkage = 0.01,
+              n.trees = 10000) #10,000 trees
+summary(gbm_fit_4)
+```
+
+We can visualize the CV error using `gbm.perf`, which both makes a plot and outputs the optimal number of trees (8,380):
+```{r}
+set.seed(1)
+opt_num_trees_per4 = gbm.perf(gbm_fit_4)
+opt_num_trees_per4
+```
+Let's tune the model parameters `interaction.depth` for each era and the full dataset. We will use a shrinkage factor of 0.01 and a 5-fold cross-validation with enough trees to ensure that the multinomial deviance curve has bottomed out. We tune for the interaction depths 1, 2, 3, 4, and 5. For each model, we plot the multinomial deviance curve to see if it has bottomed out and we can see its minimum. 
+
+**First Period (1959-1974)**
+
+```{r, message = F, warning = F}
+set.seed(1)
+# try five different interaction depths with 5000 trees
+
+gbm_fit_1_per1 = gbm(Position ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+              data = train_data_1,
+              distribution = "multinomial",
+              cv.folds = 10,
+              interaction.depth = 1,
+              shrinkage = 0.01,
+              n.trees = 5000)
+gbm.perf(gbm_fit_1_per1)
+
+
+gbm_fit_2_per1 = gbm(Position ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+              data = train_data_1,
+              distribution = "multinomial",
+              cv.folds = 10,
+              interaction.depth = 2,
+              shrinkage = 0.01,
+              n.trees = 5000)
+gbm.perf(gbm_fit_2_per1)
+
+gbm_fit_3_per1 = gbm(Position ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+              data = train_data_1,
+              distribution = "multinomial",
+              cv.folds = 10,
+              interaction.depth = 3,
+              shrinkage = 0.01,
+              n.trees = 5000)
+gbm.perf(gbm_fit_3_per1)
+
+gbm_fit_4_per1 = gbm(Position ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+              data = train_data_1,
+              distribution = "multinomial",
+              cv.folds = 10,
+              interaction.depth = 4,
+              shrinkage = 0.01,
+              n.trees = 5000)
+gbm.perf(gbm_fit_4_per1)
+
+gbm_fit_5_per1 = gbm(Position ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+              data = train_data_1,
+              distribution = "multinomial",
+              cv.folds = 10,
+              interaction.depth = 5,
+              shrinkage = 0.01,
+              n.trees = 5000)
+gbm.perf(gbm_fit_5_per1)
+```
+5,000 trees looks to be deep enough to minimize the multinomial deviance curve.
+
+```{r}
+set.seed(1)
+cv_errors_per1 = bind_rows(
+  tibble(ntree = 1:5000, cv_err = gbm_fit_1_per1$cv.error, depth = 1),
+  tibble(ntree = 1:5000, cv_err = gbm_fit_2_per1$cv.error, depth = 2),
+  tibble(ntree = 1:5000, cv_err = gbm_fit_3_per1$cv.error, depth = 3),
+  tibble(ntree = 1:5000, cv_err = gbm_fit_4_per1$cv.error, depth = 4),
+  tibble(ntree = 1:5000, cv_err = gbm_fit_5_per1$cv.error, depth = 5)
+)
+```
+
+We can then plot these as follows:
+```{r}
+set.seed(1)
+cv_errors_per1 %>%
+  ggplot(aes(x = ntree, y = cv_err, colour = factor(depth))) +
+  geom_line() + theme_bw()
+```
+
+Based on this plot, it appears the cross-validation error curve is lowest for the model with interaction depth 4. 
+
+Let's save the optimal model and optimal number of trees:
+```{r}
+set.seed(1)
+gbm_fit_optimal_per1 = gbm_fit_4_per1
+optimal_num_trees_per1 = gbm.perf(gbm_fit_4_per1) #688 trees
+summary(gbm_fit_optimal_per1, n.trees = optimal_num_trees_per1, plotit = FALSE)
+optimal_num_trees_per1
+```
+
+**Second Period (1975-1989)**
+
+```{r, message = F, warning = F}
+set.seed(1)
+# try five different interaction depths with 10,000 trees
+
+gbm_fit_1_per2 = gbm(Position ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+              data = train_data_2,
+              distribution = "multinomial",
+              cv.folds = 10,
+              interaction.depth = 1,
+              shrinkage = 0.01,
+              n.trees = 10000)
+gbm.perf(gbm_fit_1_per2)
+
+gbm_fit_2_per2 = gbm(Position ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+              data = train_data_2,
+              distribution = "multinomial",
+              cv.folds = 10,
+              interaction.depth = 2,
+              shrinkage = 0.01,
+              n.trees = 10000)
+gbm.perf(gbm_fit_2_per2)
+
+gbm_fit_3_per2 = gbm(Position ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+              data = train_data_2,
+              distribution = "multinomial",
+              cv.folds = 10,
+              interaction.depth = 3,
+              shrinkage = 0.01,
+              n.trees = 10000)
+gbm.perf(gbm_fit_3_per2)
+
+gbm_fit_4_per2 = gbm(Position ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+              data = train_data_2,
+              distribution = "multinomial",
+              cv.folds = 10,
+              interaction.depth = 4,
+              shrinkage = 0.01,
+              n.trees = 10000)
+gbm.perf(gbm_fit_4_per2)
+
+gbm_fit_5_per2 = gbm(Position ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+              data = train_data_2,
+              distribution = "multinomial",
+              cv.folds = 10,
+              interaction.depth = 5,
+              shrinkage = 0.01,
+              n.trees = 10000)
+gbm.perf(gbm_fit_5_per2)
+```
+
+
+```{r}
+set.seed(1)
+cv_errors_per2 = bind_rows(
+  tibble(ntree = 1:10000, cv_err = gbm_fit_1_per2$cv.error, depth = 1),
+  tibble(ntree = 1:10000, cv_err = gbm_fit_2_per2$cv.error, depth = 2),
+  tibble(ntree = 1:10000, cv_err = gbm_fit_3_per2$cv.error, depth = 3),
+  tibble(ntree = 1:10000, cv_err = gbm_fit_4_per2$cv.error, depth = 4),
+  tibble(ntree = 1:10000, cv_err = gbm_fit_5_per2$cv.error, depth = 5)
+)
+```
+
+We can then plot these as follows:
+```{r}
+set.seed(1)
+cv_errors_per2 %>%
+  ggplot(aes(x = ntree, y = cv_err, colour = factor(depth))) +
+  geom_line() + theme_bw()
+```
+
+Based on this plot, it appears the cross-validation error curve is lowest for the model with interaction depth 4. 
+
+Let's save the optimal model and optimal number of trees:
+
+```{r}
+set.seed(1)
+gbm_fit_optimal_per2 = gbm_fit_4_per2
+optimal_num_trees_per2 = gbm.perf(gbm_fit_4_per2) #1312 trees
+summary(gbm_fit_optimal_per2, n.trees = optimal_num_trees_per2, plotit = FALSE)
+optimal_num_trees_per2
+```
+**Third Period (1990-2004)**
+
+```{r, message = F, warning = F}
+set.seed(1)
+# try five different interaction depths with 10,000 trees
+
+gbm_fit_1_per3 = gbm(Position ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+              data = train_data_3,
+              distribution = "multinomial",
+              cv.folds = 10,
+              interaction.depth = 1,
+              shrinkage = 0.01,
+              n.trees = 10000)
+gbm.perf(gbm_fit_1_per3)
+
+gbm_fit_2_per3 = gbm(Position ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+              data = train_data_3,
+              distribution = "multinomial",
+              cv.folds = 10,
+              interaction.depth = 2,
+              shrinkage = 0.01,
+              n.trees = 10000)
+gbm.perf(gbm_fit_2_per3)
+
+gbm_fit_3_per3 = gbm(Position ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+              data = train_data_3,
+              distribution = "multinomial",
+              cv.folds = 10,
+              interaction.depth = 3,
+              shrinkage = 0.01,
+              n.trees = 10000)
+gbm.perf(gbm_fit_3_per3)
+
+gbm_fit_4_per3 = gbm(Position ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+              data = train_data_3,
+              distribution = "multinomial",
+              cv.folds = 10,
+              interaction.depth = 4,
+              shrinkage = 0.01,
+              n.trees = 10000)
+gbm.perf(gbm_fit_4_per3)
+
+gbm_fit_5_per3 = gbm(Position ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+              data = train_data_3,
+              distribution = "multinomial",
+              cv.folds = 10,
+              interaction.depth = 5,
+              shrinkage = 0.01,
+              n.trees = 10000)
+gbm.perf(gbm_fit_5_per3)
+```
+
+
+```{r}
+set.seed(1)
+cv_errors_per3 = bind_rows(
+  tibble(ntree = 1:10000, cv_err = gbm_fit_1_per3$cv.error, depth = 1),
+  tibble(ntree = 1:10000, cv_err = gbm_fit_2_per3$cv.error, depth = 2),
+  tibble(ntree = 1:10000, cv_err = gbm_fit_3_per3$cv.error, depth = 3),
+  tibble(ntree = 1:10000, cv_err = gbm_fit_4_per3$cv.error, depth = 4),
+  tibble(ntree = 1:10000, cv_err = gbm_fit_5_per3$cv.error, depth = 5)
+)
+```
+
+We can then plot these as follows:
+```{r}
+set.seed(1)
+cv_errors_per3 %>%
+  ggplot(aes(x = ntree, y = cv_err, colour = factor(depth))) +
+  geom_line() + theme_bw()
+```
+
+Based on this plot, it appears the cross-validation error curve is lowest for the model with interaction depth 3. 
+
+Let's save the optimal model and optimal number of trees:
+```{r}
+set.seed(1)
+gbm_fit_optimal_per3 = gbm_fit_3_per3
+optimal_num_trees_per3 = gbm.perf(gbm_fit_3_per3) #1687 trees
+summary(gbm_fit_optimal_per3, n.trees = optimal_num_trees_per3, plotit = FALSE)
+optimal_num_trees_per3
+```
+
+**Fourth Period (2005-2019)**
+
+```{r, message = F, warning = F}
+set.seed(1)
+# try five different interaction depths with 10,000 trees
+
+gbm_fit_1_per4 = gbm(Position ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+              data = train_data_4,
+              distribution = "multinomial",
+              cv.folds = 10,
+              interaction.depth = 1,
+              shrinkage = 0.01,
+              n.trees = 10000)
+gbm.perf(gbm_fit_1_per4)
+
+gbm_fit_2_per4 = gbm(Position ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+              data = train_data_4,
+              distribution = "multinomial",
+              cv.folds = 10,
+              interaction.depth = 2,
+              shrinkage = 0.01,
+              n.trees = 10000)
+gbm.perf(gbm_fit_2_per4)
+
+gbm_fit_3_per4 = gbm(Position ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+              data = train_data_4,
+              distribution = "multinomial",
+              cv.folds = 10,
+              interaction.depth = 3,
+              shrinkage = 0.01,
+              n.trees = 10000)
+gbm.perf(gbm_fit_3_per4)
+
+gbm_fit_4_per4 = gbm(Position ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+              data = train_data_4,
+              distribution = "multinomial",
+              cv.folds = 10,
+              interaction.depth = 4,
+              shrinkage = 0.01,
+              n.trees = 10000)
+gbm.perf(gbm_fit_4_per4)
+
+gbm_fit_5_per4 = gbm(Position ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+              data = train_data_4,
+              distribution = "multinomial",
+              cv.folds = 10,
+              interaction.depth = 5,
+              shrinkage = 0.01,
+              n.trees = 10000)
+gbm.perf(gbm_fit_5_per4)
+```
+
+
+```{r}
+set.seed(1)
+cv_errors_per4 = bind_rows(
+  tibble(ntree = 1:10000, cv_err = gbm_fit_1_per4$cv.error, depth = 1),
+  tibble(ntree = 1:10000, cv_err = gbm_fit_2_per4$cv.error, depth = 2),
+  tibble(ntree = 1:10000, cv_err = gbm_fit_3_per4$cv.error, depth = 3),
+  tibble(ntree = 1:10000, cv_err = gbm_fit_4_per4$cv.error, depth = 4),
+  tibble(ntree = 1:10000, cv_err = gbm_fit_5_per4$cv.error, depth = 5)
+)
+```
+
+We can then plot these as follows:
+```{r}
+set.seed(1)
+cv_errors_per4 %>%
+  ggplot(aes(x = ntree, y = cv_err, colour = factor(depth))) +
+  geom_line() + theme_bw()
+```
+
+Based on this plot, it appears depth = 4 is best suited for the GBM. Hence, we select interaction.depth = 4.
+
+Let's save the optimal model and optimal number of trees:
+```{r}
+set.seed(1)
+gbm_fit_optimal_per4 = gbm_fit_3_per4
+optimal_num_trees_per4 = gbm.perf(gbm_fit_3_per4) #1816 trees
+summary(gbm_fit_optimal_per4, n.trees = optimal_num_trees_per4, plotit = FALSE)
+optimal_num_trees_per4
+```
+
+**Full Period (1959-2019)**
+
+```{r, message = F, warning = F}
+set.seed(1)
+# try five different interaction depths with 7,500 trees 
+# note we don't bottom out multinomial deviance here; the dataset is so large that it crashes the computer when running code with a number of # trees substantially higher than 7,500
+
+gbm_fit_1_full = gbm(Position ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+              data = train_data,
+              distribution = "multinomial",
+              cv.folds = 10,
+              interaction.depth = 1,
+              shrinkage = 0.01,
+              n.trees = 7500)
+gbm.perf(gbm_fit_1_full)
+
+gbm_fit_2_full = gbm(Position ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+              data = train_data,
+              distribution = "multinomial",
+              cv.folds = 10,
+              interaction.depth = 2,
+              shrinkage = 0.01,
+              n.trees = 7500)
+gbm.perf(gbm_fit_2_full)
+
+gbm_fit_3_full = gbm(Position ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+              data = train_data,
+              distribution = "multinomial",
+              cv.folds = 10,
+              interaction.depth = 3,
+              shrinkage = 0.01,
+              n.trees = 7500)
+gbm.perf(gbm_fit_3_full)
+
+gbm_fit_4_full = gbm(Position ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+              data = train_data,
+              distribution = "multinomial",
+              cv.folds = 10,
+              interaction.depth = 4,
+              shrinkage = 0.01,
+              n.trees = 7500)
+gbm.perf(gbm_fit_4_full)
+
+gbm_fit_5_full = gbm(Position ~ astTotals+blkTotals+stlTotals+fg3aTotals+pctFT+trbTotals,
+              data = train_data,
+              distribution = "multinomial",
+              cv.folds = 10,
+              interaction.depth = 5,
+              shrinkage = 0.01,
+              n.trees = 7500)
+gbm.perf(gbm_fit_5_full)
+```
+
+
+```{r}
+set.seed(1)
+cv_errors_full = bind_rows(
+  tibble(ntree = 1:7500, cv_err = gbm_fit_1_full$cv.error, depth = 1),
+  tibble(ntree = 1:7500, cv_err = gbm_fit_2_full$cv.error, depth = 2),
+  tibble(ntree = 1:7500, cv_err = gbm_fit_3_full$cv.error, depth = 3),
+  tibble(ntree = 1:7500, cv_err = gbm_fit_4_full$cv.error, depth = 4),
+  tibble(ntree = 1:7500, cv_err = gbm_fit_5_full$cv.error, depth = 5)
+)
+```
+
+We can then plot these as follows:
+```{r}
+set.seed(1)
+cv_errors_full %>%
+  ggplot(aes(x = ntree, y = cv_err, colour = factor(depth))) +
+  geom_line() + theme_bw()
+```
+
+Based on this plot, it appears depth = 5 is best suited for the GBM. Hence, we select interaction.depth = 5.
+
+Let's save the optimal model and optimal number of trees:
+```{r, warning = F, message = F}
+set.seed(1)
+gbm_fit_optimal_full = gbm_fit_5_full
+optimal_num_trees_full = gbm.perf(gbm_fit_5_full) #2159 trees
+summary(gbm_fit_optimal_per4, n.trees = optimal_num_trees_per4, plotit = FALSE)
+optimal_num_trees_full
+```
+
+Now we will examine variable importance plots for all of the features for each era and the full period. 
+
+```{r}
+set.seed(1)
+# first era
+plot(gbm_fit_optimal_per1, i.var = "fg3aTotals", n.trees = optimal_num_trees_per1, type = "response")
+plot(gbm_fit_optimal_per1, i.var = "trbTotals", n.trees = optimal_num_trees_per1, type = "response")
+plot(gbm_fit_optimal_per1, i.var = "astTotals", n.trees = optimal_num_trees_per1, type = "response")
+plot(gbm_fit_optimal_per1, i.var = "blkTotals", n.trees = optimal_num_trees_per1, type = "response")
+plot(gbm_fit_optimal_per1, i.var = "stlTotals", n.trees = optimal_num_trees_per1, type = "response")
+plot(gbm_fit_optimal_per1, i.var = "pctFT", n.trees = optimal_num_trees_per1, type = "response")
+```
+
+```{r}
+set.seed(1)
+#second era
+plot(gbm_fit_optimal_per2, i.var = "fg3aTotals", n.trees = optimal_num_trees_per2, type = "response")
+plot(gbm_fit_optimal_per2, i.var = "trbTotals", n.trees = optimal_num_trees_per2, type = "response")
+plot(gbm_fit_optimal_per2, i.var = "astTotals", n.trees = optimal_num_trees_per2, type = "response")
+plot(gbm_fit_optimal_per2, i.var = "blkTotals", n.trees = optimal_num_trees_per2, type = "response")
+plot(gbm_fit_optimal_per2, i.var = "stlTotals", n.trees = optimal_num_trees_per2, type = "response")
+plot(gbm_fit_optimal_per2, i.var = "pctFT", n.trees = optimal_num_trees_per2, type = "response")
+```
+
+```{r}
+set.seed(1)
+#third era
+plot(gbm_fit_optimal_per3, i.var = "fg3aTotals", n.trees = optimal_num_trees_per3, type = "response")
+plot(gbm_fit_optimal_per3, i.var = "trbTotals", n.trees = optimal_num_trees_per3, type = "response")
+plot(gbm_fit_optimal_per3, i.var = "astTotals", n.trees = optimal_num_trees_per3, type = "response")
+plot(gbm_fit_optimal_per3, i.var = "blkTotals", n.trees = optimal_num_trees_per3, type = "response")
+plot(gbm_fit_optimal_per3, i.var = "stlTotals", n.trees = optimal_num_trees_per3, type = "response")
+plot(gbm_fit_optimal_per3, i.var = "pctFT", n.trees = optimal_num_trees_per3, type = "response")
+```
+
+```{r}
+set.seed(1)
+#fourth era
+plot(gbm_fit_optimal_per4, i.var = "fg3aTotals", n.trees = optimal_num_trees_per4, type = "response")
+plot(gbm_fit_optimal_per4, i.var = "trbTotals", n.trees = optimal_num_trees_per4, type = "response")
+plot(gbm_fit_optimal_per4, i.var = "astTotals", n.trees = optimal_num_trees_per4, type = "response")
+plot(gbm_fit_optimal_per4, i.var = "blkTotals", n.trees = optimal_num_trees_per4, type = "response")
+plot(gbm_fit_optimal_per4, i.var = "stlTotals", n.trees = optimal_num_trees_per4, type = "response")
+plot(gbm_fit_optimal_per4, i.var = "pctFT", n.trees = optimal_num_trees_per4, type = "response")
+```
+
+```{r}
+set.seed(1)
+#full period
+plot(gbm_fit_optimal_full, i.var = "fg3aTotals", n.trees = optimal_num_trees_full, type = "response")
+plot(gbm_fit_optimal_full, i.var = "trbTotals", n.trees = optimal_num_trees_full, type = "response")
+plot(gbm_fit_optimal_full, i.var = "astTotals", n.trees = optimal_num_trees_full, type = "response")
+plot(gbm_fit_optimal_full, i.var = "blkTotals", n.trees = optimal_num_trees_full, type = "response")
+plot(gbm_fit_optimal_full, i.var = "stlTotals", n.trees = optimal_num_trees_full, type = "response")
+plot(gbm_fit_optimal_full, i.var = "pctFT", n.trees = optimal_num_trees_full, type = "response")
+```
+
+Now, let's compute predictions and compare optimal model results on the test set for each era and the full data period using the MSE.
+
+```{r, message = F, warning = F}
+set.seed(1)
+decision_tree_predictions_per1 = predict(optimal_tree_1, newdata = test_data_1, type = "class") 
+tree_misclass_err_per1 = mean(decision_tree_predictions_per1 != test_data_1$Position) 
+tree_misclass_err_per1
+
+decision_tree_predictions_per2 = predict(optimal_tree_2, newdata = test_data_2, type = "class") 
+tree_misclass_err_per2 = mean(decision_tree_predictions_per2 != test_data_2$Position) 
+tree_misclass_err_per2
+
+decision_tree_predictions_per3 = predict(optimal_tree_3, newdata = test_data_3, type = "class") 
+tree_misclass_err_per3 = mean(decision_tree_predictions_per3 != test_data_3$Position) 
+tree_misclass_err_per3
+
+decision_tree_predictions_per4 = predict(optimal_tree_4, newdata = test_data_4, type = "class") 
+tree_misclass_err_per4 = mean(decision_tree_predictions_per4 != test_data_4$Position) 
+tree_misclass_err_per4
+
+decision_tree_predictions_full = predict(optimal_tree_full, newdata = test_data, type = "class") 
+tree_misclass_err_full = mean(decision_tree_predictions_full != test_data$Position) 
+tree_misclass_err_full
+
+rf_predictions_per1 = predict(optimal_rf_fit_1, newdata = test_data_1, type = "response") 
+rf_misclass_err_per1 = mean(rf_predictions_per1 != test_data_1$Position)
+rf_misclass_err_per1
+
+rf_predictions_per2 = predict(optimal_rf_fit_2, newdata = test_data_2, type = "response") 
+rf_misclass_err_per2 = mean(rf_predictions_per2 != test_data_2$Position)
+rf_misclass_err_per2
+
+rf_predictions_per3 = predict(optimal_rf_fit_3, newdata = test_data_3, type = "response") 
+rf_misclass_err_per3 = mean(rf_predictions_per3 != test_data_3$Position)
+rf_misclass_err_per3
+
+rf_predictions_per4 = predict(optimal_rf_fit_4, newdata = test_data_4, type = "response") 
+rf_misclass_err_per4 = mean(rf_predictions_per4 != test_data_4$Position)
+rf_misclass_err_per4
+
+rf_predictions_full = predict(optimal_rf_fit_full, newdata = test_data, type = "response") 
+rf_misclass_err_full = mean(rf_predictions_full != test_data$Position)
+rf_misclass_err_full
+
+gbm_probabilities_per1 = predict(gbm_fit_optimal_per1,n.trees = optimal_num_trees_per1,newdata = test_data_1, type = "response")
+gbm_predictions_per1 = gbm_probabilities_per1 %>% as.tibble() %>%
+  rename(G = G.688, `F` = F.688, C = C.688) %>%
+  mutate(predicted_G = as.numeric(G > 0.5), 
+         predicted_F = as.numeric(`F` > 0.5), 
+         predicted_C = as.numeric(C > 0.5)) %>%
+  mutate(predicted_position = ifelse(predicted_G == 1, "G", ifelse(predicted_F == 1, "F", "C"))) %>% pull(predicted_position)
+gbm_misclass_err_per1 = mean(gbm_predictions_per1 != test_data_1$Position)
+gbm_misclass_err_per1
+
+gbm_probabilities_per2 = predict(gbm_fit_optimal_per2,n.trees = optimal_num_trees_per2,newdata = test_data_2, type = "response")
+gbm_predictions_per2 = gbm_probabilities_per2 %>% as.tibble() %>% 
+    rename(G = G.1312, `F` = F.1312, C = C.1312) %>%
+  mutate(predicted_G = as.numeric(G > 0.5), 
+         predicted_F = as.numeric(`F` > 0.5), 
+         predicted_C = as.numeric(C > 0.5)) %>%
+  mutate(predicted_position = ifelse(predicted_G == 1, "G", ifelse(predicted_F == 1, "F", "C"))) %>% pull(predicted_position)
+gbm_misclass_err_per2 = mean(gbm_predictions_per2 != test_data_2$Position)
+gbm_misclass_err_per2
+
+gbm_probabilities_per3 = predict(gbm_fit_optimal_per3,n.trees = optimal_num_trees_per3,newdata = test_data_3, type = "response")
+gbm_predictions_per3 = gbm_probabilities_per3 %>% as.tibble() %>% 
+  rename(G = G.1687, `F` = F.1687, C = C.1687) %>% 
+  mutate(predicted_G = as.numeric(G > 0.5), 
+         predicted_F = as.numeric(`F` > 0.5), 
+         predicted_C = as.numeric(C > 0.5)) %>%
+  mutate(predicted_position = ifelse(predicted_G == 1, "G", ifelse(predicted_F == 1, "F", "C"))) %>% pull(predicted_position)
+gbm_misclass_err_per3 = mean(gbm_predictions_per3 != test_data_3$Position)
+gbm_misclass_err_per3
+
+gbm_probabilities_per4 = predict(gbm_fit_optimal_per4,n.trees = optimal_num_trees_per4,newdata = test_data_4, type = "response")
+gbm_predictions_per4 = gbm_probabilities_per4 %>% as.tibble() %>% 
+  rename(G = G.1816, `F` = F.1816, C = C.1816) %>% 
+  mutate(predicted_G = as.numeric(G > 0.5), 
+         predicted_F = as.numeric(`F` > 0.5), 
+         predicted_C = as.numeric(C > 0.5)) %>%
+  mutate(predicted_position = ifelse(predicted_G == 1, "G", ifelse(predicted_F == 1, "F", "C"))) %>% pull(predicted_position)
+gbm_misclass_err_per4 = mean(gbm_predictions_per3 != test_data_4$Position)
+gbm_misclass_err_per4
+
+gbm_probabilities_full = predict(gbm_fit_optimal_full,n.trees = optimal_num_trees_full,newdata = test_data, type = "response")
+gbm_predictions_full = gbm_probabilities_full %>% as.tibble() %>% 
+   rename(G = G.2159, `F` = F.2159, C = C.2159) %>% 
+  mutate(predicted_G = as.numeric(G > 0.5), 
+         predicted_F = as.numeric(`F` > 0.5), 
+         predicted_C = as.numeric(C > 0.5)) %>%
+  mutate(predicted_position = ifelse(predicted_G == 1, "G", ifelse(predicted_F == 1, "F", "C"))) %>% pull(predicted_position)
+gbm_misclass_err_full = mean(gbm_predictions_full != test_data$Position)
+gbm_misclass_err_full
+```
+
+Let's visualize the errors with a plot 
+
+```{r, message = F, warning = F}
+set.seed(1)
+err_tibble = tibble(
+  Model = c("Tree-based", "Tree-based", "Tree-based", "Tree-based", "Tree-based", 
+           "Random Forest", "Random Forest", "Random Forest", "Random Forest", "Random Forest", 
+           "GBM", "GBM", "GBM","GBM", "GBM"),
+  Error = c(tree_misclass_err_per1, tree_misclass_err_per2, tree_misclass_err_per3, tree_misclass_err_per4, tree_misclass_err_full, 
+           rf_misclass_err_per1, rf_misclass_err_per2, rf_misclass_err_per3, rf_misclass_err_per4, rf_misclass_err_full, 
+           gbm_misclass_err_per1, gbm_misclass_err_per2, gbm_misclass_err_per3, gbm_misclass_err_per4, gbm_misclass_err_full), 
+  Era = c("First", "Second", "Third", "Fourth", "Full", 
+           "First", "Second", "Third", "Fourth", "Full", 
+           "First", "Second", "Third", "Fourth", "Full")
+)
+err_tibble %>% arrange(Error)
+
+err_tibble %>% ggplot(mapping = aes(x = Era, y = Error, colour = Model)) + geom_point() + theme_bw()
+```
+It appears the best-performing model we have is the Random Forest model on the second era (1975-1990). The best-performing model on the full dataset is the Random Forest Model. The Gradient Boosting Model performs extremely poorly on the second and fourth eras, but it performs better than the Random Forest Model in the third era. 
+
+**Conclusions**
+- Overall conclusions and recommendations based on the analysis, comparison of method performance, takeaway messages for stakeholders, limitations of the current study and recommended follow-up analyses.
