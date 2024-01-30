@@ -1,5 +1,5 @@
 ---
-title: 'STAT471 Final Project: Predicting NBA Player Salaries'
+title: 'STAT471 Final Project: Predicting NBA Player Positions'
 author: "Jackson Joffe, Jane Huang, Jake Iyoob"
 date: 'Due: May 5, 2021 at 11:59pm'
 output:
